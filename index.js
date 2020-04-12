@@ -2,6 +2,13 @@ module.exports = function(RED) {
   'use strict';
 
   const HueColor = require('hue-colors').default;
+  const path = require('path');
+  const State = require(path.join(__dirname, '/api/hue/model/lights/State.js'));
+  const Info = require(path.join(__dirname, '/api/hue/model/lights/Info.js'));
+  const SetResponse = require(path.join(__dirname, '/api/hue/model/lights/SetResponse.js'));
+  const Capabilities = require(path.join(__dirname, '/api/hue/model/lights/Capabilities.js'));
+  const GlobalState = require(path.join(__dirname, '/api/hue/model/State.js'));
+  const Registration = require(path.join(__dirname, '/api/hue/model/Registration.js'));
 
   function AmazonEchoDeviceNode(config) {
     RED.nodes.createNode(this, config);
@@ -184,82 +191,77 @@ module.exports = function(RED) {
     });
 
     app.post('/api', function(req, res) {
-      var template = fs.readFileSync(__dirname + '/api/hue/templates/registration.json', 'utf8').toString();
-
-      var data = {
-        username: 'c6260f982b43a226b5542b967f612ce'
-      };
-
-      var output = Mustache.render(template, data);
-      output = JSON.parse(output);
-
+      const output = new Registration();
+      output.success('c6260f982b43a226b5542b967f612ce');
       res.json(output);
     });
 
     app.get('/api/:username', function(req, res) {
-      var lightsTemplate = fs.readFileSync(__dirname + '/api/hue/templates/lights/all.json', 'utf8').toString();
-      var template = fs.readFileSync(__dirname + '/api/hue/templates/state.json', 'utf8').toString();
-
-      var data = {
-        lights: getDevicesAttributes(hubNode.context()),
-        address: req.hostname,
-        username: req.params.username,
-        date: new Date().toISOString().split('.').shift(),
-        uniqueid: function() {
-          return hueUniqueId(this.id);
+      const lights = getDevicesAttributes(hubNode.context()).reduce((l, d) => {
+        const uid = hueUniqueId(d.id);
+        const state = new State(d.on, d.bri, d.hue, d.sat, d.ct, d.colormode);
+        switch (d.devtype) {
+          case '1': // Color Temperature Light.
+            l[d.id] = Info.forCT(d.name, state).extended(uid).withCapabilities(Capabilities.forCT());
+            break;
+          case '2': // Dimmable light.
+            l[d.id] = Info.forDimmable(d.name, state).extended(uid).withCapabilities(Capabilities.forDimmable());
+            break;
+          default: // Extended Color Light (default).
+            l[d.id] = Info.forRGBW(d.name, state).extended(uid).withCapabilities(Capabilities.forRGBW());
         }
-      }
+        return l;
+      }, {});
 
-      var output = Mustache.render(template, data, {
-        lightsTemplate: lightsTemplate
-      });
-      output = JSON.parse(output);
-      delete output.lights.last;
+      const output = new GlobalState(req.hostname, req.params.username).withLights(lights);
 
       res.json(output);
     });
 
     app.get('/api/:username/lights', function(req, res) {
-      var template = fs.readFileSync(__dirname + '/api/hue/templates/lights/all.json', 'utf8').toString();
-
-      var data = {
-        lights: getDevicesAttributes(hubNode.context()),
-        date: new Date().toISOString().split('.').shift(),
-        uniqueid: function() {
-          return hueUniqueId(this.id);
+      const output = getDevicesAttributes(hubNode.context()).reduce((lights, d) => {
+        const uid = hueUniqueId(d.id);
+        const state = new State(d.on, d.bri, d.hue, d.sat, d.ct, d.colormode);
+        switch (d.devtype) {
+          case '1': // Color Temperature Light.
+            lights[d.id] = Info.forCT(d.name, state).extended(uid).withCapabilities(Capabilities.forCT());
+            break;
+          case '2': // Dimmable light.
+            lights[d.id] = Info.forDimmable(d.name, state).extended(uid).withCapabilities(Capabilities.forDimmable());
+            break;
+          default: // Extended Color Light (default).
+            lights[d.id] = Info.forRGBW(d.name, state).extended(uid).withCapabilities(Capabilities.forRGBW());
         }
-      }
-
-      var output = Mustache.render(template, data);
-      output = JSON.parse(output);
-      delete output.last;
+        return lights;
+      }, {});
 
       res.json(output);
     });
 
     app.get('/api/:username/lights/:id', function(req, res) {
-      var template = fs.readFileSync(__dirname + '/api/hue/templates/lights/get-state.json', 'utf8').toString();
-
-      var deviceName = '';
-
-      getDevices().forEach(function(device) {
-        if (req.params.id == device.id)
-          deviceName = device.name
-      });
+      var device = getDevice(req.params.id);
 
       var data = getDeviceAttributes(req.params.id, hubNode.context());
-      data.name = deviceName;
-      data.date = new Date().toISOString().split('.').shift();
+      var state = new State(data.on, data.bri, data.hue, data.sat, data.ct, data.colormode);
 
-      var output = Mustache.render(template, data);
-      output = JSON.parse(output);
+      var info;
+      switch (device.devtype) {
+        case '1': // Color Temperature Light.
+          info = Info.forCT(device.name, state);
+          break;
+        case '2': // Dimmable light.
+          info = Info.forDimmable(device.name, state);
+          break;
+        default: // Extended Color Light (default).
+          info = Info.forRGBW(device.name, state);
+      }
 
-      res.json(output);
+      res.json(info);
     });
 
     app.put('/api/:username/lights/:id/state', function(req, res) {
 
-      var meta = {
+      const meta = {
         insert: {
           by: 'alexa',
           details: {
@@ -269,16 +271,43 @@ module.exports = function(RED) {
             user_agent: req.headers['user-agent']
           }
         }
-      }
+      };
 
       setDeviceAttributes(req.params.id, req.body, meta, hubNode.context());
+      const data = getDeviceAttributes(req.params.id, hubNode.context());
 
-      var template = fs.readFileSync(__dirname + '/api/hue/templates/lights/set-state.json', 'utf8').toString();
+      var device = getDevice(req.params.id);
 
-      var data = getDeviceAttributes(req.params.id, hubNode.context());
+      const output = new SetResponse();
+      output.success('on', data.on);
+      output.success('bri', data.bri);
 
-      var output = Mustache.render(template, data);
-      output = JSON.parse(output);
+      switch (device.devtype) {
+        case '1':   // Color Temperature Light.
+          output.success('ct', data.ct);
+          if (req.body.hasOwnProperty('hue')) {
+            output.error('hue', data.hue);
+          }
+          if (req.body.hasOwnProperty('sat')) {
+            output.error('sat', data.sat);
+          }
+          break;
+        case '2': // Dimmable light.
+          if (req.body.hasOwnProperty('ct')) {
+            output.error('ct', data.ct);
+          }
+          if (req.body.hasOwnProperty('hue')) {
+            output.error('hue', data.hue);
+          }
+          if (req.body.hasOwnProperty('sat')) {
+            output.error('sat', data.sat);
+          }
+          break;
+        default: // Extended Color Light (default).
+          output.success('ct', data.ct);
+          output.success('hue', data.hue);
+          output.success('sat', data.sat);
+      }
 
       res.json(output);
 
@@ -354,16 +383,27 @@ module.exports = function(RED) {
 
     var devices = [];
 
-    RED.nodes.eachNode(function(node) {
+    RED.nodes.eachNode(function (node) {
       if (node.type == 'amazon-echo-device') {
         devices.push({
           id: formatUUID(node.id),
-          name: node.name
+          name: node.name,
+          type: node.type,
+          devtype: node.devtype
         });
       }
     });
 
     return devices;
+  }
+
+  function getDevice(id) {
+    for (let d of getDevices()) {
+      if (id === d.id) {
+        return d;
+      }
+    }
+    return null;
   }
 
   function getDeviceAttributes(id, context) {
