@@ -1,4 +1,4 @@
-module.exports = function(RED) {
+module.exports = function (RED) {
   'use strict';
 
   const HueColor = require('hue-colors').default;
@@ -7,7 +7,7 @@ module.exports = function(RED) {
     RED.nodes.createNode(this, config);
     var deviceNode = this;
 
-    deviceNode.on('input', function(msg) {
+    deviceNode.on('input', function (msg) {
 
       var nodeDeviceId = formatUUID(config.id);
 
@@ -27,10 +27,12 @@ module.exports = function(RED) {
     RED.nodes.createNode(this, config);
     var hubNode = this;
 
-    var port = config.port > 0 && config.port < 65536 ? config.port : 80;
+    var port = config.port > 0 && config.port < 65536 ? config.port : 8088;
+    var nginxPort = config.nginxPort > 0 && config.nginxPort < 65536 ? config.nginxPort : 80;
+    var nginxHostname = config.hostname;
 
     // Start SSDP service
-    var ssdpServer = ssdp(port, config);
+    var ssdpServer = ssdp(nginxPort, config, nginxHostname);
     if (config.discovery) {
       ssdpServer.start();
     }
@@ -42,7 +44,7 @@ module.exports = function(RED) {
     var app = require('express')();
     var httpServer = stoppable(http.createServer(app), graceMilliseconds);
 
-    httpServer.on('error', function(error) {
+    httpServer.on('error', function (error) {
       hubNode.status({
         fill: 'red',
         shape: 'ring',
@@ -52,7 +54,7 @@ module.exports = function(RED) {
       return;
     });
 
-    httpServer.listen(port, function(error) {
+    httpServer.listen(port, function (error) {
 
       if (error) {
         hubNode.status({
@@ -67,14 +69,14 @@ module.exports = function(RED) {
       hubNode.status({
         fill: 'green',
         shape: 'dot',
-        text: 'online'
+        text: 'online ' + config.hostname
       });
 
       // REST API Settings
       api(app, hubNode, config);
     });
 
-    hubNode.on('input', function(msg) {
+    hubNode.on('input', function (msg) {
 
       var nodeDeviceId = null;
 
@@ -88,7 +90,7 @@ module.exports = function(RED) {
         } else {
 
           if ('nodename' in msg.payload && msg.payload.nodename !== null) {
-            getDevices().forEach(function(device) {
+            getDevices().forEach(function (device) {
               if (msg.payload.nodename == device.name) {
                 nodeDeviceId = device.id
                 delete msg.payload['nodename'];
@@ -122,17 +124,17 @@ module.exports = function(RED) {
       }
     });
 
-    hubNode.on('close', function(removed, doneFunction) {
+    hubNode.on('close', function (removed, doneFunction) {
       // Stop SSDP server
       ssdpServer.stop();
 
       // Stop HTTP server
-      httpServer.stop(function() {
+      httpServer.stop(function () {
         if (typeof doneFunction === 'function')
           doneFunction();
         RED.log.info('Alexa Local Hub closing done...');
       });
-      setImmediate(function() {
+      setImmediate(function () {
         httpServer.emit('close');
       });
     });
@@ -155,25 +157,25 @@ module.exports = function(RED) {
       type: '*/*'
     }));
 
-    app.use(function(err, req, res, next) {
+    app.use(function (err, req, res, next) {
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
         RED.log.debug('Error: Invalid JSON request: ' + JSON.stringify(err.body));
       }
       next();
     });
 
-    app.use(function(req, res, next) {
+    app.use(function (req, res, next) {
       if (Object.keys(req.body).length > 0)
         RED.log.debug('Request body: ' + JSON.stringify(req.body));
       next();
     });
 
-    app.get('/description.xml', function(req, res) {
+    app.get('/description.xml', (req, res) => {
       var template = fs.readFileSync(__dirname + '/api/hue/templates/description.xml').toString();
 
       var data = {
-        address: req.hostname,
-        port: req.connection.localPort,
+        address: config.hostname,
+        port: config.nginxPort,
         huehubid: getHueHubId(config)
       };
 
@@ -183,7 +185,7 @@ module.exports = function(RED) {
       res.send(output);
     });
 
-    app.post('/api', function(req, res) {
+    app.post('/api', function (req, res) {
       var template = fs.readFileSync(__dirname + '/api/hue/templates/registration.json', 'utf8').toString();
 
       var data = {
@@ -196,16 +198,16 @@ module.exports = function(RED) {
       res.json(output);
     });
 
-    app.get('/api/:username', function(req, res) {
+    app.get('/api/:username', function (req, res) {
       var lightsTemplate = fs.readFileSync(__dirname + '/api/hue/templates/lights/all.json', 'utf8').toString();
       var template = fs.readFileSync(__dirname + '/api/hue/templates/state.json', 'utf8').toString();
 
       var data = {
         lights: getDevicesAttributes(hubNode.context()),
-        address: req.hostname,
+        address: config.hostname,
         username: req.params.username,
         date: new Date().toISOString().split('.').shift(),
-        uniqueid: function() {
+        uniqueid: function () {
           return hueUniqueId(this.id);
         }
       }
@@ -219,13 +221,13 @@ module.exports = function(RED) {
       res.json(output);
     });
 
-    app.get('/api/:username/lights', function(req, res) {
+    app.get('/api/:username/lights', function (req, res) {
       var template = fs.readFileSync(__dirname + '/api/hue/templates/lights/all.json', 'utf8').toString();
 
       var data = {
         lights: getDevicesAttributes(hubNode.context()),
         date: new Date().toISOString().split('.').shift(),
-        uniqueid: function() {
+        uniqueid: function () {
           return hueUniqueId(this.id);
         }
       }
@@ -237,12 +239,12 @@ module.exports = function(RED) {
       res.json(output);
     });
 
-    app.get('/api/:username/lights/:id', function(req, res) {
+    app.get('/api/:username/lights/:id', function (req, res) {
       var template = fs.readFileSync(__dirname + '/api/hue/templates/lights/get-state.json', 'utf8').toString();
 
       var deviceName = '';
 
-      getDevices().forEach(function(device) {
+      getDevices().forEach(function (device) {
         if (req.params.id == device.id)
           deviceName = device.name
       });
@@ -257,7 +259,7 @@ module.exports = function(RED) {
       res.json(output);
     });
 
-    app.put('/api/:username/lights/:id/state', function(req, res) {
+    app.put('/api/:username/lights/:id/state', function (req, res) {
 
       var meta = {
         insert: {
@@ -290,14 +292,16 @@ module.exports = function(RED) {
   //
   // SSDP
   //
-  function ssdp(port, config) {
+  function ssdp(port, config, hostname) {
+
+    const location = hostname ? `http://${config.hostname}${port === 80 ? "" : ":" + port}/description.xml` : {
+      port: port,
+      path: '/description.xml'
+    }
 
     var ssdpService = require('node-ssdp').Server,
       server = new ssdpService({
-        location: {
-          port: port,
-          path: '/description.xml'
-        },
+        location,
         udn: 'uuid:' + getHueHubId(config)
       })
 
@@ -354,7 +358,7 @@ module.exports = function(RED) {
 
     var devices = [];
 
-    RED.nodes.eachNode(function(node) {
+    RED.nodes.eachNode(function (node) {
       if (node.type == 'amazon-echo-device') {
         devices.push({
           id: formatUUID(node.id),

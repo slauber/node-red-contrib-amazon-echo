@@ -3,12 +3,22 @@
     category: "input",
     color: "#31C4F3",
     defaults: {
+      nginxPort: {
+        value: "80",
+        required: false,
+        validate: function(port) {
+          return port > 0 && port < 65536;
+        }
+      },
       port: {
         value: "80",
         required: true,
         validate: function(port) {
           return port > 0 && port < 65536;
         }
+      },
+      hostname: {
+        value: ""
       },
       processinput: {
         value: 0
@@ -37,9 +47,17 @@
       }
     </style>
     <div class="form-row">
-        <label for="node-input-port"><i class="fa fa-globe"></i> Port</label>
-        <input type="text" id="node-input-port" placeholder="80">
+        <label for="node-input-nginxPort"><i class="fa fa-globe"></i> nginx Port</label>
+        <input type="text" id="node-input-nginxPort" placeholder="80">
     </div>
+    <div class="form-row">
+      <label for="node-input-port"><i class="fa fa-globe"></i> Port</label>
+      <input type="text" id="node-input-port" placeholder="8088">
+  </div>
+  <div class="form-row">
+    <label for="node-input-hostname"><i class="fa fa-globe"></i> Hostname</label>
+    <input type="text" id="node-input-hostname" placeholder="Hostname">
+</div>
     <div class="form-row">
         <label for="node-input-processinput"><i class="fa fa-tag"></i> Process Input</label>
         <select class="form-control" id="node-input-processinput">
